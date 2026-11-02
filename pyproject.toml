@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "termreel"
+version = "0.1.0"
+description = "Record terminal sessions and turn them into lightweight animated SVGs for READMEs."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+dependencies = []
+
+[project.optional-dependencies]
+windows = ["pywinpty>=2.0; sys_platform == 'win32'"]
+
+[project.scripts]
+termreel = "termreel.cli:main"
+
+[tool.setuptools]
+packages = ["termreel"]

@@ -1,0 +1,8 @@
+@size 72x12
+@title termreel — hello
+@prompt [bold cyan]~/demo[/] [magenta]❯[/]
+$ python -c "print('\033[1;32m✓\033[0m hello from a real command')"
+~ termreel render hello.reel -o hello.svg
+> [dim]replaying 14 events…[/]
+> [green]✓[/] 38 frames ([bold]21 unique[/]), 9 unique rows, [yellow]6.2 KB[/] -> hello.svg
+@sleep 1

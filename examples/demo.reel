@@ -1,0 +1,13 @@
+# The demo at the top of the README. Render it with:
+#   termreel render examples/demo.reel -o examples/demo.svg
+@size 64x18
+@title termreel demo
+@prompt [bold #61afef]~/site[/] [#c678dd]❯[/]
+@typing 20
+
+$ python build.py
+@sleep 1.2
+~ git push
+> [dim]To github.com:you/site.git[/]
+>    [yellow]a1f9e3c..7bd20c4[/]  main -> main
+@sleep 2
