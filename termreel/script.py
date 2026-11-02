@@ -7,6 +7,8 @@ Reproducible, editable, and it needs no pty, so it works the same on every OS.
     @title My CLI            window title
     @prompt [green]~/app[/] $        prompt shown before each command
     @typing 18               typing speed, characters per second
+    @cwd ..                  run later `$` commands here (relative to the script's folder)
+    @max-lines 20            show only the first 20 lines of each command's output (0 = all)
     @sleep 1.5               pause
     @clear                   clear the screen
     $ ls -la                 type the command, then really run it
@@ -82,6 +84,7 @@ class _Builder:
         self.clock = 0.25
         self.cps = 16.0
         self.rng = random.Random(seed)
+        self.max_lines = 0
 
     def emit(self, data: str, gap: float = 0.0) -> None:
         self.clock += gap
@@ -122,6 +125,10 @@ def build(script_text: str, seed: int = 7, run_cwd: str | None = None) -> Record
             prompt = markup(arg) + " "
         elif kind == "@typing":
             b.cps = float(arg)
+        elif kind == "@cwd":
+            run_cwd = os.path.normpath(os.path.join(run_cwd or os.getcwd(), arg.strip()))
+        elif kind == "@max-lines":
+            b.max_lines = int(arg)
         elif kind == "@sleep":
             b.clock += float(arg)
         elif kind == "@clear":
@@ -155,6 +162,7 @@ def _run(b: _Builder, command: str, cwd: str | None) -> None:
     env = dict(os.environ, FORCE_COLOR="1", CLICOLOR_FORCE="1", PY_COLORS="1", PYTHONIOENCODING="utf-8",
                COLUMNS=str(b.rec.cols), LINES=str(b.rec.rows), TERMREEL="1")
     start, base = time.monotonic(), b.clock
+    shown, hidden = 0, 0  # output lines kept and dropped under @max-lines
     with subprocess.Popen(command, shell=True, cwd=cwd, env=env,
                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT) as proc:
         decoder = codecs.getincrementaldecoder("utf-8")("replace")
@@ -165,9 +173,22 @@ def _run(b: _Builder, command: str, cwd: str | None) -> None:
             # Pipes give bare LF where a terminal would have produced CRLF.
             text = re.sub(r"(?<!\r)\n", "\r\n", decoder.decode(chunk))
             b.clock = base + (time.monotonic() - start)
+            if text and b.max_lines:
+                pieces = text.split("\r\n")
+                keep = []
+                for i, piece in enumerate(pieces):
+                    ends = i < len(pieces) - 1  # every piece but the last ended with a newline
+                    if shown < b.max_lines:
+                        keep.append(piece + ("\r\n" if ends else ""))
+                        shown += ends
+                    else:
+                        hidden += ends
+                text = "".join(keep)
             if text:
                 b.rec.events.append((b.clock, text))
     b.clock = max(b.clock, base + (time.monotonic() - start))
+    if hidden:
+        b.emit("\x1b[0m" + markup(f"[dim]… {hidden} more line{'s' * (hidden != 1)}[/]") + "\r\n", 0.05)
 
 
 def build_file(path: str, seed: int = 7) -> Recording:

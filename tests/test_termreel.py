@@ -128,6 +128,26 @@ class ScriptTests(unittest.TestCase):
         rec = script.build("$ python -c \"print('from a subprocess')\"\n")
         self.assertIn("from a subprocess", "".join(d for _, d in rec.events))
 
+    def test_cwd_is_relative_to_the_script_folder(self):
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as root:
+            os.mkdir(os.path.join(root, "docs"))
+            rec = script.build("@cwd ..\n$ python -c \"import os; print(os.getcwd())\"\n",
+                               run_cwd=os.path.join(root, "docs"))
+            out = "".join(d for _, d in rec.events)
+            self.assertIn(os.path.basename(root), out)
+            self.assertNotIn("docs", out.split("os.getcwd())\"")[-1])
+
+    def test_max_lines_trims_and_says_so(self):
+        cmd = 'python -c "print(chr(10).join(str(i) for i in range(10)))"'
+        rec = script.build(f"@size 30x20\n@max-lines 3\n$ {cmd}\n")
+        t = Terminal(rec.cols, rec.rows)
+        for _, data in rec.events:
+            t.feed(data)
+        self.assertIn("0\n1\n2\n… 7 more lines", t.text())
+        self.assertNotIn("\n3\n", t.text())
+
     def test_typing_is_reproducible(self):
         a = script.build("~ hello world", seed=3).events
         b = script.build("~ hello world", seed=3).events
