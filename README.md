@@ -91,6 +91,8 @@ Live recording on Windows needs `pip install pywinpty` (or `pip install .[window
 
 Typing rhythm is randomized but seeded, so re-rendering produces an identical file.
 
+The terminal demos in [pwaudit](https://github.com/BlazeXYZ/pwaudit), [authtrail](https://github.com/BlazeXYZ/authtrail), [portscan-fingerprint](https://github.com/BlazeXYZ/portscan-fingerprint), [MailSleuth](https://github.com/BlazeXYZ/mailsleuth), [Secret Time Machine](https://github.com/BlazeXYZ/secret-time-machine), [Regex Replay](https://github.com/BlazeXYZ/regex-replay), [Blast Radius](https://github.com/BlazeXYZ/blast-radius) and [Pathfinder Playground](https://github.com/BlazeXYZ/pathfinding-playground) are all rendered from `.reel` scripts in each repo's `docs/` folder.
+
 ## Demo script specification
 
 ```text
@@ -114,6 +116,8 @@ $ python build.py                 # typed, then really executed
 | `> text` | print a line of output |
 | `@prompt text` | the prompt shown before each command |
 | `@size COLSxROWS`, `@title`, `@typing CPS`, `@sleep S`, `@clear` | setup and pacing |
+| `@cwd PATH` | run later `$` commands in PATH, relative to the script's folder (`@cwd ..` lets a script in `docs/` run from the repo root) |
+| `@max-lines N` | show only the first N lines of each command's real output, then a dim `… 57 more lines` (0 shows everything) |
 
 Markup in `>` and `@prompt` lines: `[bold]`, `[dim]`, `[italic]`, `[underline]`, `[strike]`, colour names (`[red]`, `[bright-cyan]`), backgrounds (`[on-blue]`), hex colours (`[#ff8800]`), combinations such as `[bold red on-black]`, and `[/]` to reset. Write `[[` for a literal `[`.
 
@@ -192,7 +196,7 @@ No runtime dependencies, so `pip install .` works anywhere Python 3.10 does. `py
 python -m unittest discover -s tests -v
 ```
 
-35 tests cover the emulator (wrapping, scrolling, scroll regions, insert and delete, SGR parsing including colon-form truecolor, wide characters, the alternate screen, sequences split across chunks), cast v2 and v3 parsing, script markup and timing, and the renderer's guarantees: valid XML, escaping, deduplication, prefix chaining, idle capping, still frames and themes.
+37 tests cover the emulator (wrapping, scrolling, scroll regions, insert and delete, SGR parsing including colon-form truecolor, wide characters, the alternate screen, sequences split across chunks), cast v2 and v3 parsing, script markup, timing, `@cwd` and `@max-lines`, and the renderer's guarantees: valid XML, escaping, deduplication, prefix chaining, idle capping, still frames and themes.
 
 ## Limitations and roadmap
 
