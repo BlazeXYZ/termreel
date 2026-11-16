@@ -1,8 +1,18 @@
 name: Themes
 
-# CI: every theme file must load, pass the strict check (contrast, naming)
-# and render. CD: on main, the gallery in docs/themes is regenerated and
-# committed, so the previews always match the theme files.
+# For theme pull requests, including ones from forks.
+#
+# CI: every theme file must load, pass the strict check (contrast, naming,
+# no duplicate names) and render. Problems are marked on the exact line of
+# the theme file in the pull request, the run summary lists the themes the
+# pull request adds or changes, and their previews are uploaded as an
+# artifact.
+#
+# CD: once a theme reaches main, the gallery in docs/themes is regenerated
+# and committed. If main is protected, it opens a pull request instead.
+#
+# Fork pull requests run with a read-only token, so this workflow never
+# needs secrets and never writes anything on a pull request.
 
 on:
   pull_request:
@@ -27,12 +37,17 @@ concurrency:
   group: themes-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  THEME_FILES: termreel/themes/builtin termreel/themes/template.json
+
 jobs:
   check:
     name: Check theme files
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 2  # the pull request's merge commit and its base
 
       - uses: actions/setup-python@v6
         with:
@@ -41,35 +56,91 @@ jobs:
       - name: Install
         run: python -m pip install .
 
+      - name: Find the themes this change adds or edits
+        id: changed
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            files=$(git diff --name-only --diff-filter=AMR HEAD^1 HEAD -- 'termreel/themes/builtin/*.json' 'termreel/themes/template.json' | tr '\n' ' ')
+          else
+            files=""
+          fi
+          echo "files=$files" >> "$GITHUB_OUTPUT"
+          echo "Changed theme files: ${files:-none}"
+
       - name: Validate every theme (warnings fail the build)
-        run: termreel themes check --strict termreel/themes/builtin termreel/themes/template.json
+        run: termreel themes check --strict $THEME_FILES 2>&1 | tee check.txt; exit "${PIPESTATUS[0]}"
 
       - name: Run the theme tests
+        if: always() && steps.changed.outcome == 'success'
         run: python -m unittest -v tests.test_termreel.ThemeTests
 
-      - name: Render the gallery
-        run: termreel themes gallery docs/themes
+      - name: Render previews of the changed themes
+        id: previews
+        if: always() && steps.changed.outputs.files != ''
+        env:
+          # File names come from the pull request, so they are passed as data,
+          # never pasted into the script.
+          CHANGED: ${{ steps.changed.outputs.files }}
+        run: |
+          mkdir -p theme-previews
+          status=0
+          for f in $CHANGED; do
+            name=$(basename "$f" .json)
+            termreel themes preview "$f" -o "theme-previews/$name.svg" || status=1
+            termreel themes preview "$f" --animated -o "theme-previews/$name-animated.svg" || status=1
+          done
+          exit $status
 
-      - name: Upload the previews
+      - name: Upload previews of the changed themes
+        if: always() && steps.previews.outcome != 'skipped'
         uses: actions/upload-artifact@v5
         with:
-          name: theme-previews
+          name: changed-theme-previews
+          path: theme-previews/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Render the whole gallery
+        id: gallery
+        run: termreel themes gallery docs/themes
+
+      - name: Upload the gallery
+        if: steps.gallery.outcome == 'success'
+        uses: actions/upload-artifact@v5
+        with:
+          name: theme-gallery
           path: docs/themes/
           retention-days: 14
 
-      - name: Report gallery changes
+      - name: Write the run summary
+        if: always()
+        env:
+          CHANGED: ${{ steps.changed.outputs.files }}
         run: |
           {
             echo "## Theme check"
             echo
-            echo "All theme files passed \`termreel themes check --strict\`."
-            echo
-            if git diff --quiet -- docs/themes && [ -z "$(git ls-files --others --exclude-standard docs/themes)" ]; then
-              echo "The committed gallery in \`docs/themes\` is up to date."
-            else
-              echo "The gallery in \`docs/themes\` changed. Download the **theme-previews** artifact to look at it."
-              echo "It will be regenerated and committed automatically once this reaches \`main\`."
+            if [ -n "$CHANGED" ]; then
+              echo "This pull request adds or edits these themes:"
+              echo
+              for f in $CHANGED; do
+                echo "- \`$f\`"
+              done
+              echo
+              echo "Download the **changed-theme-previews** artifact at the bottom of this page to see them,"
+              echo "or **theme-gallery** to see them next to every other theme."
+              echo
             fi
+            if [ -f check.txt ]; then
+              echo "Results of \`termreel themes check --strict\`:"
+              echo
+              echo '```'
+              grep -v '^::' check.txt || true
+              echo '```'
+            fi
+            echo
+            echo "The gallery in \`docs/themes\` is regenerated and committed automatically after merging,"
+            echo "so there is no need to commit preview SVGs in the pull request."
           } >> "$GITHUB_STEP_SUMMARY"
 
   publish-gallery:
@@ -79,6 +150,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v5
 
@@ -86,20 +158,50 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install
-        run: python -m pip install .
-
-      - name: Render the gallery
-        run: termreel themes gallery docs/themes
-
-      - name: Commit the gallery if it changed
+      - name: Commit the gallery, or open a pull request if main is protected
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: automation/theme-gallery
         run: |
-          git add docs/themes
-          if git diff --cached --quiet; then
-            echo "Gallery already up to date."
-            exit 0
-          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "docs: regenerate theme gallery"
-          git push
+
+          regenerate() {
+            python -m pip install --quiet .
+            termreel themes gallery docs/themes
+            git add docs/themes
+            if git diff --cached --quiet; then
+              return 1
+            fi
+            git commit --quiet -m "docs: regenerate theme gallery"
+          }
+
+          # Another merge can land while this runs, so start from the newest
+          # main each time and try a few times before giving up on a push.
+          for attempt in 1 2 3; do
+            git fetch --quiet origin main
+            git reset --quiet --hard origin/main
+            if ! regenerate; then
+              echo "The gallery is already up to date."
+              exit 0
+            fi
+            if git push --quiet origin HEAD:main; then
+              echo "Committed the regenerated gallery to main."
+              exit 0
+            fi
+            sleep $((attempt * 5))
+          done
+
+          # main is protected (or kept moving). Offer the change as a pull request.
+          git push --quiet --force origin "HEAD:refs/heads/$BRANCH"
+          if [ -n "$(gh pr list --head "$BRANCH" --state open --json number --jq '.[].number')" ]; then
+            echo "Updated the open gallery pull request."
+            exit 0
+          fi
+          if gh pr create --base main --head "$BRANCH" \
+              --title "docs: regenerate theme gallery" \
+              --body "The theme files changed, so the previews in docs/themes were regenerated by the Themes workflow. Merging this keeps the gallery in step with the themes."; then
+            exit 0
+          fi
+          echo "::error::Could not push to main or open a pull request. Either let github-actions[bot] push to main, or turn on 'Allow GitHub Actions to create and approve pull requests' under Settings > Actions > General. The regenerated gallery is on the $BRANCH branch."
+          exit 1

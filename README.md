@@ -45,7 +45,7 @@ termreel replays your session through its own terminal emulator and writes a sin
 - **A real terminal emulator.** Escape sequences are interpreted, not stripped.
 - **Looks right.** Block characters (`█▓▒░▁▂▃`) are drawn as shapes, so progress bars have no seams. Text is pinned to the cell grid, so columns line up whatever monospace font the viewer has.
 - **Accessible.** The SVG has `role="img"` and an `aria-label`. Viewers who ask for reduced motion see the final frame as a still image.
-- **Themes.** Ten built-in themes, plus your own themes from a small JSON file. See [Themes](#themes).
+- **Themes.** A set of built-in themes, plus your own from a small JSON file. See [Themes](#themes).
 - **Compatible.** Reads asciinema `.cast` files (v1, v2 and v3) and writes v2.
 
 ## Quick start
@@ -134,7 +134,9 @@ Commands run by `$` get `FORCE_COLOR=1`, `CLICOLOR_FORCE=1` and `TERM=xterm-256c
 
 ## Themes
 
-termreel ships with ten themes: `dracula`, `one-dark`, `nord`, `monokai`, `solarized-dark`, `solarized-light`, `github-light`, `gruvbox-dark`, `catppuccin-mocha` and `tokyo-night`. There is also `template`, the documented theme that new themes start from. The [theme gallery](docs/themes/README.md) has a preview of each one.
+termreel comes with built-in themes such as `dracula`, `nord`, `gruvbox-dark` and `github-light`. There is also `template`, the documented theme that new themes start from. Run `termreel themes` for the full list, or look at the [theme gallery](docs/themes/README.md). The gallery updates itself whenever a theme is added, so it is always the complete list.
+
+Anyone can suggest a new built-in theme with a pull request. The [Themes workflow](.github/workflows/themes.yml) checks it, marks any problem on the exact line of the theme file, and renders previews for the pull request. See [adding your theme to termreel](docs/custom-themes.md#7-add-your-theme-to-termreel).
 
 A theme is a small JSON file, so making your own takes a couple of minutes:
 
@@ -255,14 +257,14 @@ There are no runtime dependencies, so `pip install termreel` works anywhere Pyth
 python -m unittest discover -s tests -v
 ```
 
-83 tests cover the emulator (wrapping, scrolling, scroll regions, insert and delete, SGR parsing including colon forms and underline colors, wide characters, line drawing, resizes, the alternate screen, sequences split across chunks), cast v1, v2 and v3 parsing, script markup, timing and error messages, the renderer (valid XML, escaping, deduplication, prefix chaining, idle capping, still frames) and themes (loading, `extends`, validation errors, contrast warnings and every `themes` command).
+92 tests cover the emulator (wrapping, scrolling, scroll regions, insert and delete, SGR parsing including colon forms and underline colors, wide characters, line drawing, resizes, the alternate screen, sequences split across chunks), cast v1, v2 and v3 parsing, script markup, timing and error messages, the renderer (valid XML, escaping, deduplication, prefix chaining, idle capping, still frames) and themes (loading, `extends`, validation errors, contrast warnings, every `themes` command, and what a contributed theme runs into in CI: broken files, duplicate names and line-accurate error markers).
 
 Three GitHub Actions workflows live in [`.github/workflows`](.github/workflows):
 
 | Workflow | When it runs | What it does |
 | --- | --- | --- |
 | [`ci.yml`](.github/workflows/ci.yml) | every push to `main` and every pull request | runs the tests on Linux, Windows and macOS with Python 3.10, 3.12 and 3.14 |
-| [`themes.yml`](.github/workflows/themes.yml) | changes to theme files or the renderer | checks every theme with `--strict`, renders the gallery and uploads it as an artifact. On `main` it commits the regenerated [gallery](docs/themes/README.md). |
+| [`themes.yml`](.github/workflows/themes.yml) | changes to theme files or the renderer, including pull requests from forks | checks every theme with `--strict` (contrast, naming, duplicate names), marks problems on the right line of the theme file, and uploads previews of the changed themes. On `main` it commits the regenerated [gallery](docs/themes/README.md), or opens a pull request if `main` is protected. |
 | [`release.yml`](.github/workflows/release.yml) | publishing a GitHub release | runs the tests, checks that the tag matches the version, builds the wheel and sdist, uploads them to PyPI and attaches them to the release |
 
 To release a new version, bump `__version__` in `termreel/__init__.py`, add a section to [CHANGELOG.md](CHANGELOG.md), push, and publish a GitHub release tagged `vX.Y.Z`. The release workflow uses PyPI trusted publishing, so no API token is stored in the repo. This needs a one-time setup on pypi.org: add a trusted publisher for this repository with the workflow `release.yml` and the environment `pypi`. A manual run of the workflow uploads to TestPyPI by default, which is handy for a dry run.

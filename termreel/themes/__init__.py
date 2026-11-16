@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -32,8 +33,28 @@ KEYS = ("name", "description", "author", "extends", "background", "foreground", 
 NAME_RE = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 
 
+class ThemeWarning(str):
+    """A check warning. key names the JSON key it is about, if any."""
+
+    key = None
+
+
+def _warning(message: str, key: str | None) -> ThemeWarning:
+    w = ThemeWarning(message)
+    w.key = key
+    return w
+
+
 class ThemeError(ValueError):
-    """A theme could not be found, read or validated."""
+    """A theme could not be found, read or validated.
+
+    file, key and line say where the problem is when that is known, so tools
+    such as `termreel themes check` can point at the right line.
+    """
+
+    def __init__(self, message: str, key: str | None = None, line: int | None = None, file=None):
+        super().__init__(message)
+        self.key, self.line, self.file = key, line, file
 
 
 @dataclass(frozen=True)
@@ -162,61 +183,70 @@ def available() -> list:
 
 # ------------------------------------------------------------------ loading
 
-def _color(value, where: str) -> str:
+def _color(value, where: str, key: str | None = None) -> str:
     if isinstance(value, str):
         m = re.fullmatch(r"#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})", value.strip())
         if m:
             hexes = m.group(1).lower()
             return "#" + (hexes if len(hexes) == 6 else "".join(c * 2 for c in hexes))
-    raise ThemeError(f"{where}: expected a color like \"#1e1e2e\", got {value!r}")
+    raise ThemeError(f"{where}: expected a color like \"#1e1e2e\", got {value!r}", key=key)
 
 
 def _palette(value, where: str) -> dict:
     """A palette (list or name -> color mapping) as a partial name -> color dict."""
     if isinstance(value, list):
         if len(value) not in (8, 16):
-            raise ThemeError(f"{where}: a palette list needs 8 or 16 colors, got {len(value)}")
-        return {PALETTE_NAMES[i]: _color(c, f"{where}[{i}]") for i, c in enumerate(value)}
+            raise ThemeError(f"{where}: a palette list needs 8 or 16 colors, got {len(value)}", key="palette")
+        return {PALETTE_NAMES[i]: _color(c, f"{where}[{i}]", "palette") for i, c in enumerate(value)}
     if isinstance(value, dict):
         unknown = sorted(k for k in value if k not in PALETTE_NAMES and not k.startswith("_"))
         if unknown:
-            raise ThemeError(f"{where}: unknown color name {unknown[0]!r}; "
-                             f"use {', '.join(COLOR_NAMES)} and their bright- versions")
-        return {k: _color(v, f"{where}.{k}") for k, v in value.items() if not k.startswith("_")}
-    raise ThemeError(f"{where}: expected a list of colors or an object of named colors")
+            raise ThemeError(f"{where}: unknown color name {unknown[0]!r}. "
+                             f"Use {', '.join(COLOR_NAMES)} and their bright- versions.", key=unknown[0])
+        return {k: _color(v, f"{where}.{k}", k) for k, v in value.items() if not k.startswith("_")}
+    raise ThemeError(f"{where}: expected a list of colors or an object of named colors", key="palette")
 
 
 def _raw(path: Path, seen: frozenset = frozenset()) -> dict:
     """Read a theme file, apply its "extends" chain and check every key."""
-    path = path.resolve()
-    if path in seen:
-        raise ThemeError(f"{path}: \"extends\" loops back to this file")
+    real = path.resolve()
+    if real in seen:
+        raise ThemeError(f"{path}: \"extends\" loops back to this file", key="extends", file=path)
     try:
         text = path.read_text(encoding="utf-8")
     except OSError as e:
-        raise ThemeError(f"{path}: {e.strerror or e}") from None
+        raise ThemeError(f"{path}: {e.strerror or e}", file=path) from None
     try:
         data = json.loads(text)
     except json.JSONDecodeError as e:
-        raise ThemeError(f"{path}: invalid JSON at line {e.lineno}, column {e.colno}: {e.msg}") from None
+        raise ThemeError(f"{path}: invalid JSON at line {e.lineno}, column {e.colno}: {e.msg}",
+                         line=e.lineno, file=path) from None
     if not isinstance(data, dict):
-        raise ThemeError(f"{path}: a theme must be a JSON object")
+        raise ThemeError(f"{path}: a theme must be a JSON object", line=1, file=path)
     data = {k: v for k, v in data.items() if not k.startswith(("_", "$"))}
     unknown = sorted(set(data) - set(KEYS))
     if unknown:
-        raise ThemeError(f"{path}: unknown key {unknown[0]!r}; allowed keys are {', '.join(KEYS)}")
-    if "palette" in data:
-        data["palette"] = _palette(data["palette"], f"{path}: palette")
+        raise ThemeError(f"{path}: unknown key {unknown[0]!r}. Allowed keys are {', '.join(KEYS)}.",
+                         key=unknown[0], file=path)
+    try:
+        if "palette" in data:
+            data["palette"] = _palette(data["palette"], f"{path}: palette")
+    except ThemeError as e:
+        e.file = path
+        raise
 
     parent = data.pop("extends", None)
     if parent is None:
         return data
     if not isinstance(parent, str) or not parent:
-        raise ThemeError(f"{path}: \"extends\" must be a theme name or a path")
+        raise ThemeError(f"{path}: \"extends\" must be a theme name or a path", key="extends", file=path)
     try:
-        base = _raw(locate(parent, relative_to=path.parent), seen | {path})
+        base = _raw(locate(parent, relative_to=path.parent), seen | {real})
     except ThemeError as e:
-        raise ThemeError(f"{path}: extends {parent!r}: {e}") from None
+        # Point at the parent's own line if the problem is there, else at "extends".
+        if e.file is None:
+            e.file, e.key = path, "extends"
+        raise ThemeError(f"{path}: extends {parent!r}: {e}", key=e.key, line=e.line, file=e.file) from None
     for key in ("name", "description", "author"):
         base.pop(key, None)  # identity is not inherited
     palette = {**base.get("palette", {}), **data.get("palette", {})}
@@ -230,35 +260,35 @@ def _build(data: dict, path: Path, source: str) -> Theme:
     where = str(path)
     for key in ("background", "foreground", "palette"):
         if key not in data:
-            raise ThemeError(f"{where}: missing required key {key!r}")
-    bg = _color(data["background"], f"{where}: background")
-    fg = _color(data["foreground"], f"{where}: foreground")
+            raise ThemeError(f"{where}: missing required key {key!r}", line=1)
+    bg = _color(data["background"], f"{where}: background", "background")
+    fg = _color(data["foreground"], f"{where}: foreground", "foreground")
     palette = data["palette"]
     missing = [n for n in COLOR_NAMES if n not in palette]
     if missing:
-        raise ThemeError(f"{where}: palette is missing {', '.join(missing)}")
+        raise ThemeError(f"{where}: palette is missing {', '.join(missing)}", key="palette")
     ansi = tuple(palette.get(n) or palette[n.removeprefix("bright-")] for n in PALETTE_NAMES)
 
     default_chrome = _mix(bg, "#000000", 0.2 if luminance(bg) < 0.4 else 0.04)
     buttons = data.get("buttons", list(WINDOW_BUTTONS))
     if not isinstance(buttons, list) or len(buttons) != 3:
-        raise ThemeError(f"{where}: buttons must be a list of 3 colors")
+        raise ThemeError(f"{where}: buttons must be a list of 3 colors", key="buttons")
     bold_is_bright = data.get("bold_is_bright", False)
     if not isinstance(bold_is_bright, bool):
-        raise ThemeError(f"{where}: bold_is_bright must be true or false")
+        raise ThemeError(f"{where}: bold_is_bright must be true or false", key="bold_is_bright")
     name = data.get("name", path.stem)
     for key in ("name", "description", "author"):
         if not isinstance(data.get(key, ""), str):
-            raise ThemeError(f"{where}: {key} must be a string")
+            raise ThemeError(f"{where}: {key} must be a string", key=key)
     return Theme(
         name=name,
         bg=bg,
         fg=fg,
         ansi=ansi,
-        cursor=_color(data.get("cursor", fg), f"{where}: cursor"),
-        chrome=_color(data.get("chrome", default_chrome), f"{where}: chrome"),
-        title=_color(data.get("title", fg), f"{where}: title"),
-        buttons=tuple(_color(c, f"{where}: buttons[{i}]") for i, c in enumerate(buttons)),
+        cursor=_color(data.get("cursor", fg), f"{where}: cursor", "cursor"),
+        chrome=_color(data.get("chrome", default_chrome), f"{where}: chrome", "chrome"),
+        title=_color(data.get("title", fg), f"{where}: title", "title"),
+        buttons=tuple(_color(c, f"{where}: buttons[{i}]", "buttons") for i, c in enumerate(buttons)),
         bold_is_bright=bold_is_bright,
         description=data.get("description", ""),
         author=data.get("author", ""),
@@ -268,8 +298,13 @@ def _build(data: dict, path: Path, source: str) -> Theme:
 
 def load_file(path) -> Theme:
     path = Path(path)
-    source = "built-in" if path.resolve().parent == BUILTIN_DIR else str(path)
-    return _build(_raw(path), path, source)
+    source = "built-in" if path.resolve().parent == BUILTIN_DIR.resolve() else str(path)
+    raw = _raw(path)
+    try:
+        return _build(raw, path, source)
+    except ThemeError as e:
+        e.file = path
+        raise
 
 
 def load(ref, relative_to=None) -> Theme:
@@ -278,9 +313,21 @@ def load(ref, relative_to=None) -> Theme:
         return ref
     if not isinstance(ref, str) or not ref:
         raise ThemeError("a theme name or path is required")
-    if ref in THEMES:
+    if not is_path(ref) and ref in THEMES:
         return THEMES[ref]
     return load_file(locate(ref, Path(relative_to) if relative_to else None))
+
+
+def key_line(path, key: str | None) -> int | None:
+    """The line where a JSON key is first defined in a file, if it can be found."""
+    if not key:
+        return None
+    pattern = re.compile(r'"' + re.escape(key) + r'"\s*:')
+    try:
+        lines = Path(path).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    return next((n for n, text in enumerate(lines, 1) if pattern.search(text)), None)
 
 
 def check(path) -> tuple:
@@ -290,22 +337,72 @@ def check(path) -> tuple:
     warnings = []
     raw = json.loads(path.read_text(encoding="utf-8"))
     if "name" not in raw:
-        warnings.append("no \"name\"; it defaults to the file name")
+        warnings.append(_warning("no \"name\", so it defaults to the file name", None))
     elif not NAME_RE.fullmatch(theme.name):
-        warnings.append(f"name {theme.name!r} should be lowercase words joined by dashes")
+        warnings.append(_warning(f"name {theme.name!r} should be lowercase words joined by dashes", "name"))
     elif theme.name != path.stem:
-        warnings.append(f"name {theme.name!r} does not match the file name {path.name!r}")
+        warnings.append(_warning(f"name {theme.name!r} does not match the file name {path.name!r}", "name"))
     ratio = contrast(theme.fg, theme.bg)
     if ratio < 4.5:
-        warnings.append(f"foreground/background contrast is {ratio:.2f}:1; aim for at least 4.5:1")
+        warnings.append(_warning(f"foreground/background contrast is {ratio:.2f}:1, aim for at least 4.5:1",
+                                 "foreground"))
     if contrast(theme.cursor, theme.bg) < 1.5:
-        warnings.append("the cursor is hard to see against the background")
+        warnings.append(_warning("the cursor is hard to see against the background", "cursor"))
     if theme.ansi[0] == theme.bg and theme.ansi[8] == theme.bg:
-        warnings.append("black and bright-black both equal the background, so 'dim' greys vanish")
+        warnings.append(_warning("black and bright-black both equal the background, so dim grays vanish",
+                                 "palette"))
     return theme, warnings
 
 
-THEMES = {name: load_file(BUILTIN_DIR / f"{name}.json") for name in builtin_names()}
+def name_conflicts(themes_by_path: dict) -> dict:
+    """Problems with theme names across a set of files: {path: [message]}.
+
+    Two files may not share a name, and "template" is reserved for the
+    template theme, so a built-in theme cannot take it.
+    """
+    problems: dict = {}
+    first: dict = {}
+    for path, theme in themes_by_path.items():
+        path = Path(path)
+        names = {theme.name}
+        if path.resolve().parent == BUILTIN_DIR.resolve():
+            names.add(path.stem)  # built-ins are looked up by file name
+            if "template" in names:
+                problems.setdefault(path, []).append(
+                    "the name \"template\" is reserved for the template theme")
+        for name in sorted(names):
+            if name in first and first[name] != path:
+                problems.setdefault(path, []).append(
+                    f"the name {name!r} is already used by {first[name]}")
+            first.setdefault(name, path)
+    return problems
+
+
+class _Builtins(Mapping):
+    """The built-in themes by name. Each file is loaded the first time it is
+    used, so one broken theme cannot stop termreel (or its tests) starting."""
+
+    def __init__(self):
+        self._cache: dict = {}
+
+    def __getitem__(self, name: str) -> Theme:
+        if name not in self._cache:
+            if not isinstance(name, str) or not NAME_RE.fullmatch(name):
+                raise KeyError(name)
+            path = BUILTIN_DIR / f"{name}.json"
+            if not path.is_file():
+                raise KeyError(name)
+            self._cache[name] = load_file(path)
+        return self._cache[name]
+
+    def __iter__(self):
+        return iter(builtin_names())
+
+    def __len__(self) -> int:
+        return len(builtin_names())
+
+
+THEMES = _Builtins()
 
 
 # ------------------------------------------------------------------ previews

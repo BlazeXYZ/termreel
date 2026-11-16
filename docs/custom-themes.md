@@ -127,16 +127,36 @@ If both `-t` and `@theme` are given, `-t` wins.
 
 ## 7. Add your theme to termreel
 
-Built-in themes live in [`termreel/themes/builtin/`](../termreel/themes/builtin), one file per theme, in exactly the same format. To suggest one:
+Built-in themes live in [`termreel/themes/builtin/`](../termreel/themes/builtin), one file per theme, in exactly the same format as your own. To suggest one:
 
-1. Add `termreel/themes/builtin/your-theme.json`. Set `"name"` to `your-theme` (lowercase words joined by dashes) and write a one-line `description`. Credit the original palette's author if it is based on someone else's work.
-2. Run `termreel themes check --strict termreel/themes/builtin` and `python -m unittest discover -s tests`.
-3. Open a pull request.
+1. Fork the repository and add `termreel/themes/builtin/your-theme.json`. Set `"name"` to `your-theme` (lowercase words joined by dashes, the same as the file name) and write a one-line `description`. If it is based on someone else's palette, credit them in `author` or the description.
+2. Check it locally:
 
-The [Themes workflow](../.github/workflows/themes.yml) then runs on the pull request. It checks every theme with `--strict`, runs the theme tests and renders the whole gallery. You can download the previews from the run's **theme-previews** artifact to see your theme next to the others. Once the pull request is merged into `main`, the same workflow regenerates [`docs/themes`](themes/README.md) and commits it, so the gallery always matches the theme files. Because of this, there is no need to commit preview SVGs yourself.
+   ```bash
+   termreel themes check --strict termreel/themes/builtin termreel/themes/template.json
+   python -m unittest discover -s tests
+   ```
+
+   Checking the whole folder matters, because it also catches a name that another theme already uses. The name `template` is reserved for the template theme.
+3. Open a pull request. Don't commit any preview SVGs, since those are generated for you.
+
+The [Themes workflow](../.github/workflows/themes.yml) then runs on the pull request:
+
+- It checks every theme with `--strict`. If something is wrong, the problem is marked on the exact line of your theme file in the pull request's **Files changed** tab, with the same message `termreel themes check` prints.
+- The run's summary page lists the themes your pull request adds or edits, along with the check results.
+- It uploads two artifacts at the bottom of the run's page. **changed-theme-previews** has a still and an animated preview of just your themes. **theme-gallery** has the whole gallery, so you can see your theme next to the others.
+
+If this is your first pull request to the repository, GitHub waits for a maintainer to approve the workflow before it runs, so the checks may take a little while to start. After the pull request is merged, the workflow regenerates [`docs/themes`](themes/README.md) on `main`, and your theme shows up in the gallery.
 
 To regenerate the gallery locally, run:
 
 ```bash
 termreel themes gallery docs/themes
 ```
+
+## 8. For maintainers
+
+A few repository settings decide how smoothly theme pull requests go:
+
+- **Approving first-time contributors.** GitHub holds workflow runs from first-time contributors until someone with write access clicks **Approve and run** on the pull request. This is set under Settings > Actions > General > "Approval for running fork pull request workflows from contributors". The theme checks never use secrets and run with a read-only token, so loosening this is fairly low risk, but it is your call.
+- **Updating the gallery.** After a merge, the workflow tries to push the regenerated gallery straight to `main` as `github-actions[bot]`. If `main` is protected, it pushes the change to the `automation/theme-gallery` branch and opens a pull request instead. That needs "Allow GitHub Actions to create and approve pull requests" turned on under Settings > Actions > General. If neither is allowed, the job fails with a message that explains this, and the regenerated gallery is still on that branch.

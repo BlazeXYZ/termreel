@@ -164,26 +164,45 @@ def _theme_files(paths: list) -> list:
     return files
 
 
+def _annotation(level: str, path, message: str, line: int | None = None) -> str:
+    """A GitHub Actions workflow command that marks a file (and line) in the PR."""
+    def esc(text: str, prop: bool = False) -> str:
+        text = str(text).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+        return text.replace(":", "%3A").replace(",", "%2C") if prop else text
+    where = f"file={esc(Path(path).as_posix(), True)}" + (f",line={line}" if line else "")
+    return f"::{level} {where},title={esc('termreel theme check', True)}::{esc(message)}"
+
+
 def cmd_themes_check(args) -> None:
     annotate = os.environ.get("GITHUB_ACTIONS") == "true"
-    failed = 0
+    results = {}  # path -> (theme or None, [(level, message, line)])
     for path in _theme_files(args.paths):
         try:
             theme, warnings = themes.check(path)
         except (themes.ThemeError, OSError) as e:
-            failed += 1
-            print(f"error    {path}: {e}")
-            if annotate:
-                print(f"::error file={path}::{e}")
+            message = str(e).removeprefix(f"{path}: ")
+            line = None
+            if isinstance(e, themes.ThemeError) and (e.file is None or Path(e.file).resolve() == Path(path).resolve()):
+                line = e.line or themes.key_line(path, e.key)
+            results[path] = (None, [("error", message, line)])
             continue
-        status = "ok" if not warnings else ("error" if args.strict else "warning")
-        print(f"{status:<9}{path} ({theme.name})")
-        for w in warnings:
-            print(f"           - {w}")
+        level = "error" if args.strict else "warning"
+        results[path] = (theme, [(level, w, themes.key_line(path, getattr(w, "key", None))) for w in warnings])
+
+    loaded = {path: theme for path, (theme, _) in results.items() if theme is not None}
+    for path, problems in themes.name_conflicts(loaded).items():
+        results[str(path) if str(path) in results else path][1].extend(
+            ("error", m, themes.key_line(path, "name")) for m in problems)
+
+    failed = 0
+    for path, (theme, problems) in results.items():
+        worst = "error" if any(lvl == "error" for lvl, _, _ in problems) else ("warning" if problems else "ok")
+        failed += worst == "error"
+        print(f"{worst:<9}{path}" + (f" ({theme.name})" if theme else ""))
+        for level, message, line in problems:
+            print(f"           - {message}" + (f" (line {line})" if line else ""))
             if annotate:
-                print(f"::{'error' if args.strict else 'warning'} file={path}::{w}")
-        if warnings and args.strict:
-            failed += 1
+                print(_annotation(level, path, message, line))
     if failed:
         sys.exit(f"termreel: {failed} theme file{'s' * (failed != 1)} failed the check")
 

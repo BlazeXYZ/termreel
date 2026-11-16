@@ -15,6 +15,8 @@
 - Window resizes, from `r` events in cast files and from resizing the window during a live recording on Linux and macOS. The SVG is sized for the largest screen.
 - Emulator support for the DEC line-drawing character set, insert mode, autowrap off, tabs forward and back (`CSI I`, `CSI Z`), repeat (`CSI b`), soft reset (`CSI ! p`) and hidden text (`SGR 8`).
 - GitHub Actions workflows for tests, theme checks with an auto-updated gallery, and PyPI releases with trusted publishing.
+- Theme pull requests from forks get problems marked on the exact line of the theme file, a run summary of the themes they add or edit, and previews of just those themes. After merging, the gallery is committed to `main`, or offered as a pull request if `main` is protected.
+- `termreel themes check` catches two themes with the same name, and a built-in theme that takes the reserved name `template`.
 
 ### Fixed
 

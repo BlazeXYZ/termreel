@@ -8,6 +8,7 @@ import xml.etree.ElementTree as ET
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import replace
 from pathlib import Path
+from unittest import mock
 
 from termreel import cast, cli, script, themes
 from termreel.cast import Recording
@@ -543,6 +544,105 @@ class ThemeTests(unittest.TestCase):
     def test_cli_rejects_bad_numbers(self):
         with self.assertRaises(SystemExit), redirect_stderr(io.StringIO()):
             run_cli("render", "x.reel", "--speed", "0")
+
+
+class ContributedThemeTests(unittest.TestCase):
+    """What a pull request adding a built-in theme runs into in CI.
+
+    The built-in folder is swapped for a temporary copy, so the tests can add
+    the kind of files a contributor might send.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.builtin = Path(self.tmp.name, "builtin")
+        self.builtin.mkdir()
+        for name in ("nord", "dracula"):
+            (self.builtin / f"{name}.json").write_text(
+                (themes.BUILTIN_DIR / f"{name}.json").read_text(encoding="utf-8"), encoding="utf-8")
+        patcher = mock.patch.multiple(themes, BUILTIN_DIR=self.builtin, THEMES=themes._Builtins())
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.addCleanup(self.tmp.cleanup)
+        env = mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "true"})
+        env.start()
+        self.addCleanup(env.stop)
+
+    def add(self, name: str, text: str) -> str:
+        path = self.builtin / name
+        path.write_text(text, encoding="utf-8")
+        return str(path)
+
+    def run_check(self, *paths) -> tuple:
+        """Run `termreel themes check --strict`. Returns (output, failed)."""
+        buf = io.StringIO()
+        failed = False
+        with redirect_stdout(buf):
+            try:
+                cli.main(["themes", "check", "--strict", *(paths or [str(self.builtin)])])
+            except SystemExit:
+                failed = True
+        return buf.getvalue(), failed
+
+    def test_a_broken_theme_does_not_break_the_others(self):
+        self.add("broken.json", '{\n  "name": "broken",\n  "background": "#000",\n  "pallete": {}\n}\n')
+        self.assertEqual(themes.load("nord").name, "nord")
+        self.assertEqual(sorted(themes.THEMES), ["broken", "dracula", "nord"])
+        with self.assertRaisesRegex(themes.ThemeError, "pallete"):
+            themes.load("broken")
+
+    def test_errors_are_reported_on_the_right_line(self):
+        path = self.add("broken.json", '{\n  "name": "broken",\n  "background": "#000",\n  "pallete": {}\n}\n')
+        out, failed = self.run_check()
+        self.assertTrue(failed)
+        self.assertIn("unknown key 'pallete'", out)
+        self.assertIn(f"::error file={Path(path).as_posix().replace(':', '%3A')},line=4,", out)
+        self.assertIn("ok       " + str(self.builtin / "nord.json"), out)  # the others still pass
+
+    def test_invalid_json_points_at_the_bad_line(self):
+        self.add("typo.json", '{\n  "name": "typo",\n  "background": "#000"\n  "foreground": "#fff"\n}\n')
+        out, failed = self.run_check()
+        self.assertTrue(failed)
+        self.assertRegex(out, r"::error file=[^\n]*typo\.json,line=4,")
+
+    def test_bad_color_and_warnings_point_at_their_key(self):
+        self.add("dull.json", json.dumps({"name": "dull", "extends": "nord", "foreground": "#444b5a"}, indent=2))
+        out, failed = self.run_check()
+        self.assertTrue(failed)
+        self.assertRegex(out, r"::error file=[^\n]*dull\.json,line=4,[^\n]*contrast")
+        self.add("dull.json", json.dumps({"name": "dull", "extends": "nord", "cursor": "blue"}, indent=2))
+        out, _ = self.run_check()
+        self.assertRegex(out, r"::error file=[^\n]*dull\.json,line=4,[^\n]*cursor")
+
+    def test_unknown_extends_points_at_extends(self):
+        self.add("child.json", json.dumps({"name": "child", "extends": "nope"}, indent=2))
+        out, failed = self.run_check()
+        self.assertTrue(failed)
+        self.assertRegex(out, r"::error file=[^\n]*child\.json,line=3,[^\n]*unknown theme 'nope'")
+
+    def test_duplicate_names_are_caught(self):
+        self.add("nord-copy.json", (self.builtin / "nord.json").read_text(encoding="utf-8"))
+        out, failed = self.run_check()
+        self.assertTrue(failed)
+        self.assertIn("is already used by", out)
+
+    def test_template_name_is_reserved(self):
+        doc = json.loads((self.builtin / "nord.json").read_text(encoding="utf-8"))
+        self.add("template.json", json.dumps({**doc, "name": "template"}, indent=2))
+        out, failed = self.run_check(str(self.builtin), str(themes.TEMPLATE_PATH))
+        self.assertTrue(failed)
+        self.assertIn("reserved for the template theme", out)
+
+    def test_a_good_contribution_passes(self):
+        doc = json.loads((self.builtin / "nord.json").read_text(encoding="utf-8"))
+        self.add("nord-warm.json", json.dumps({**doc, "name": "nord-warm", "description": "Warmer Nord."}, indent=2))
+        out, failed = self.run_check(str(self.builtin), str(themes.TEMPLATE_PATH))
+        self.assertFalse(failed, out)
+        self.assertNotIn("::", out)
+
+    def test_annotations_escape_special_characters(self):
+        line = cli._annotation("error", "C:/a,b.json", "50% done\nnext", 3)
+        self.assertEqual(line, "::error file=C%3A/a%2Cb.json,line=3,title=termreel theme check::50%25 done%0Anext")
 
 
 if __name__ == "__main__":
