@@ -1,0 +1,105 @@
+name: Themes
+
+# CI: every theme file must load, pass the strict check (contrast, naming)
+# and render. CD: on main, the gallery in docs/themes is regenerated and
+# committed, so the previews always match the theme files.
+
+on:
+  pull_request:
+    paths:
+      - "termreel/themes/**"
+      - "termreel/render.py"
+      - "termreel/terminal.py"
+      - ".github/workflows/themes.yml"
+  push:
+    branches: [main]
+    paths:
+      - "termreel/themes/**"
+      - "termreel/render.py"
+      - "termreel/terminal.py"
+      - ".github/workflows/themes.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: themes-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Check theme files
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: python -m pip install .
+
+      - name: Validate every theme (warnings fail the build)
+        run: termreel themes check --strict termreel/themes/builtin termreel/themes/template.json
+
+      - name: Run the theme tests
+        run: python -m unittest -v tests.test_termreel.ThemeTests
+
+      - name: Render the gallery
+        run: termreel themes gallery docs/themes
+
+      - name: Upload the previews
+        uses: actions/upload-artifact@v5
+        with:
+          name: theme-previews
+          path: docs/themes/
+          retention-days: 14
+
+      - name: Report gallery changes
+        run: |
+          {
+            echo "## Theme check"
+            echo
+            echo "All theme files passed \`termreel themes check --strict\`."
+            echo
+            if git diff --quiet -- docs/themes && [ -z "$(git ls-files --others --exclude-standard docs/themes)" ]; then
+              echo "The committed gallery in \`docs/themes\` is up to date."
+            else
+              echo "The gallery in \`docs/themes\` changed. Download the **theme-previews** artifact to look at it."
+              echo "It will be regenerated and committed automatically once this reaches \`main\`."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  publish-gallery:
+    name: Update the gallery
+    needs: check
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: python -m pip install .
+
+      - name: Render the gallery
+        run: termreel themes gallery docs/themes
+
+      - name: Commit the gallery if it changed
+        run: |
+          git add docs/themes
+          if git diff --cached --quiet; then
+            echo "Gallery already up to date."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "docs: regenerate theme gallery"
+          git push

@@ -1,0 +1,57 @@
+{
+  "_readme": "termreel theme template. Copy it with `termreel themes init my-theme.json`, change the colors, check it with `termreel themes check my-theme.json` and look at it with `termreel themes preview my-theme.json`. Keys that start with an underscore are comments and are ignored. The full tutorial is docs/custom-themes.md.",
+
+  "_name": "Required for themes contributed to termreel. It must match the file name (template.json -> template). Lowercase letters, digits and dashes.",
+  "name": "template",
+
+  "_description": "Optional. One line shown by `termreel themes`.",
+  "description": "The documented starting point for your own theme.",
+
+  "_author": "Optional. Who made the theme.",
+  "author": "termreel",
+
+  "_extends": "Optional. Start from another theme (a built-in name such as \"nord\", or a path relative to this file) and list only what you change. This template sets every key, so it extends nothing.",
+
+  "_colors": "Every color is \"#rrggbb\" or the short form \"#rgb\".",
+
+  "_background": "Required. The terminal background and the window body.",
+  "background": "#1b1f27",
+
+  "_foreground": "Required. Text with no color of its own.",
+  "foreground": "#d5dae3",
+
+  "_cursor": "Optional, defaults to the foreground color. The block cursor (drawn at 75% opacity).",
+  "cursor": "#ffcc66",
+
+  "_chrome": "Optional, defaults to a shade of the background. The window title bar.",
+  "chrome": "#14171d",
+
+  "_title": "Optional, defaults to the foreground color. The window title text.",
+  "title": "#aab2c0",
+
+  "_buttons": "Optional. The three window buttons, left to right. Defaults to the macOS red, yellow and green.",
+  "buttons": ["#ff5f57", "#febc2e", "#28c840"],
+
+  "_bold_is_bright": "Optional, default false. When true, bold text in colors 0-7 uses the bright variant, as many terminals do.",
+  "bold_is_bright": false,
+
+  "_palette": "Required unless extending. The 16 ANSI colors that programs ask for by number. Use names, as here, or a list of 16 (or 8) colors in the order black, red, green, yellow, blue, magenta, cyan, white, then the bright versions. Bright colors that are left out copy the normal ones. Colors 16-255 are the standard xterm cube and grays and are not themeable.",
+  "palette": {
+    "black": "#2a303b",
+    "red": "#ef6b73",
+    "green": "#8fd18c",
+    "yellow": "#f2c879",
+    "blue": "#6cb6ff",
+    "magenta": "#c99bf2",
+    "cyan": "#63d3d1",
+    "white": "#c5cbd6",
+    "bright-black": "#59627a",
+    "bright-red": "#ff8a91",
+    "bright-green": "#a9e5a4",
+    "bright-yellow": "#ffd98e",
+    "bright-blue": "#8ec8ff",
+    "bright-magenta": "#dbb6ff",
+    "bright-cyan": "#85e6e3",
+    "bright-white": "#f2f4f8"
+  }
+}

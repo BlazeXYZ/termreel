@@ -1,21 +1,48 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "termreel"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Record terminal sessions and turn them into lightweight animated SVGs for READMEs."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "BlazeXYZ" }]
+keywords = ["terminal", "svg", "animation", "asciinema", "readme", "demo", "recording"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Documentation",
+    "Topic :: Multimedia :: Graphics",
+    "Topic :: Terminals",
+]
 dependencies = []
 
 [project.optional-dependencies]
 windows = ["pywinpty>=2.0; sys_platform == 'win32'"]
 
+[project.urls]
+Homepage = "https://github.com/BlazeXYZ/termreel"
+Source = "https://github.com/BlazeXYZ/termreel"
+Issues = "https://github.com/BlazeXYZ/termreel/issues"
+Changelog = "https://github.com/BlazeXYZ/termreel/blob/main/CHANGELOG.md"
+
 [project.scripts]
 termreel = "termreel.cli:main"
 
-[tool.setuptools]
-packages = ["termreel"]
+[tool.setuptools.packages.find]
+include = ["termreel*"]
+
+[tool.setuptools.dynamic]
+version = { attr = "termreel.__version__" }
+
+[tool.setuptools.package-data]
+"termreel.themes" = ["*.json"]
+"termreel.themes.builtin" = ["*.json"]

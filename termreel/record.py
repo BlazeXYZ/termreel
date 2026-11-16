@@ -2,7 +2,8 @@
 
 On Linux/macOS this uses the standard-library pty module. On Windows it uses
 pywinpty (``pip install pywinpty``) when installed; without it, use scripted
-demos (see script.py), which work everywhere.
+demos (see script.py), which work everywhere. On POSIX, resizing the window
+while recording is captured as a resize event.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ import sys
 import time
 
 from .cast import Recording
+from .terminal import resize_sequence
 
 
 def default_shell() -> str:
@@ -42,24 +44,48 @@ def _record_posix(command: str, cols: int, rows: int, on_output) -> None:
     import fcntl
     import pty
     import select
+    import signal
     import struct
     import termios
     import tty
 
     pid, master = pty.fork()
     if pid == 0:
-        os.environ["TERMREEL"] = "1"
-        os.execvp("/bin/sh", ["/bin/sh", "-c", command])
+        try:
+            os.environ["TERMREEL"] = "1"
+            os.execvp("/bin/sh", ["/bin/sh", "-c", command])
+        finally:
+            os._exit(127)  # exec failed: never fall back into the parent's code
 
-    fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+    def set_size(c: int, r: int) -> None:
+        fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", r, c, 0, 0))
+
+    set_size(cols, rows)
+    size = (cols, rows)
+    resized = False
+
+    def on_winch(signum, frame) -> None:
+        nonlocal resized
+        resized = True
+
+    old_winch = signal.signal(signal.SIGWINCH, on_winch)
     decoder = codecs.getincrementaldecoder("utf-8")("replace")
     stdin = sys.stdin.fileno()
+    inputs = [master, stdin]
     old_attrs = termios.tcgetattr(stdin) if os.isatty(stdin) else None
     try:
         if old_attrs:
             tty.setraw(stdin)
         while True:
-            readable, _, _ = select.select([master, stdin], [], [])
+            # The timeout lets a window resize be noticed between keystrokes.
+            readable, _, _ = select.select(inputs, [], [], 0.25)
+            if resized:
+                resized = False
+                new = tuple(shutil.get_terminal_size(size))
+                if new != size:
+                    size = new
+                    set_size(*size)
+                    on_output(resize_sequence(*size))
             if master in readable:
                 try:
                     chunk = os.read(master, 65536)
@@ -73,10 +99,12 @@ def _record_posix(command: str, cols: int, rows: int, on_output) -> None:
                     on_output(text)
             if stdin in readable:
                 data = os.read(stdin, 1024)
-                if not data:
-                    break
-                os.write(master, data)
+                if data:
+                    os.write(master, data)
+                else:
+                    inputs.remove(stdin)  # stdin ended; keep recording output
     finally:
+        signal.signal(signal.SIGWINCH, old_winch)
         if old_attrs:
             termios.tcsetattr(stdin, termios.TCSAFLUSH, old_attrs)
         os.close(master)
@@ -99,16 +127,22 @@ def _record_windows(command: str, cols: int, rows: int, on_output) -> None:
     done = threading.Event()
 
     def pump_output() -> None:
-        while proc.isalive():
-            try:
-                text = proc.read(65536)
-            except EOFError:
-                break
-            if text:
-                sys.stdout.write(text)
-                sys.stdout.flush()
-                on_output(text)
-        done.set()
+        # Read until EOF rather than while the process is alive, so output
+        # written just before it exits is not lost.
+        try:
+            while True:
+                try:
+                    text = proc.read(65536)
+                except EOFError:
+                    break
+                if text:
+                    sys.stdout.write(text)
+                    sys.stdout.flush()
+                    on_output(text)
+                elif not proc.isalive():
+                    break
+        finally:
+            done.set()
 
     threading.Thread(target=pump_output, daemon=True).start()
     # Map the special keys msvcrt reports as two-part codes to VT sequences.
@@ -119,7 +153,7 @@ def _record_windows(command: str, cols: int, rows: int, on_output) -> None:
             ch = msvcrt.getwch()
             if ch in ("\x00", "\xe0"):
                 ch = special.get(msvcrt.getwch(), "")
-            if ch:
+            if ch and proc.isalive():
                 proc.write(ch)
         else:
             time.sleep(0.01)

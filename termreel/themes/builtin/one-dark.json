@@ -1,0 +1,26 @@
+{
+  "name": "one-dark",
+  "description": "Atom's One Dark: muted, balanced colors on a cool gray.",
+  "background": "#282c34",
+  "foreground": "#abb2bf",
+  "cursor": "#528bff",
+  "chrome": "#21252b",
+  "palette": {
+    "black": "#3f4451",
+    "red": "#e06c75",
+    "green": "#98c379",
+    "yellow": "#d19a66",
+    "blue": "#61afef",
+    "magenta": "#c678dd",
+    "cyan": "#56b6c2",
+    "white": "#d7dae0",
+    "bright-black": "#4f5666",
+    "bright-red": "#be5046",
+    "bright-green": "#a5e075",
+    "bright-yellow": "#e5c07b",
+    "bright-blue": "#4dc4ff",
+    "bright-magenta": "#de73ff",
+    "bright-cyan": "#4cd1e0",
+    "bright-white": "#e6e6e6"
+  }
+}

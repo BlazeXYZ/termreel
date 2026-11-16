@@ -20,14 +20,14 @@ from xml.sax.saxutils import escape
 
 from .cast import Recording
 from .terminal import Style, Terminal, char_width
-from .themes import THEMES, palette_color
+from .themes import DEFAULT_THEME, Theme, load as load_theme, palette_color
 
 FONT_STACK = "ui-monospace,SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace"
 
 
 @dataclass
 class Options:
-    theme: str = "dracula"
+    theme: object = DEFAULT_THEME  # a theme name, a path to a .json theme, or a Theme
     font_size: float = 14.0
     line_height: float = 1.3
     fps: int = 30
@@ -41,6 +41,20 @@ class Options:
     cursor: bool = True
     at: float | None = None  # render a still frame at this time instead
     trim: bool = True  # drop blank rows below the last row ever used
+
+    def validate(self) -> None:
+        checks = [
+            (self.font_size > 0, "font size must be positive"),
+            (self.line_height > 0, "line height must be positive"),
+            (self.fps >= 1, "fps must be at least 1"),
+            (self.speed > 0, "speed must be positive"),
+            (self.idle_limit > 0, "idle limit must be positive"),
+            (self.loop_delay >= 0, "loop delay cannot be negative"),
+            (self.padding >= 0, "padding cannot be negative"),
+        ]
+        for ok, message in checks:
+            if not ok:
+                raise ValueError(message)
 
 
 @dataclass
@@ -56,7 +70,7 @@ def build_frames(rec: Recording, opts: Options) -> list:
     """Replay the recording; return [(time, Snapshot)] with adjusted timing."""
     term = Terminal(rec.cols, rec.rows)
     frames = []
-    interval = 1.0 / max(1, opts.fps)
+    interval = 1.0 / opts.fps
     clock, last_t, bucket_start = 0.0, 0.0, None
 
     def push(t: float) -> None:
@@ -90,7 +104,7 @@ def build_frames(rec: Recording, opts: Options) -> list:
 class _StyleSheet:
     """Maps terminal styles to compact CSS classes."""
 
-    def __init__(self, theme: dict):
+    def __init__(self, theme: Theme):
         self.theme = theme
         self.fg_classes: dict = {}
         self.bg_classes: dict = {}
@@ -103,15 +117,18 @@ class _StyleSheet:
         return c
 
     def resolve(self, s: Style) -> tuple:
-        fg = self.color(s.fg, self.theme["fg"])
+        fg_index = s.fg
+        if self.theme.bold_is_bright and s.bold and isinstance(fg_index, int) and fg_index < 8:
+            fg_index += 8
+        fg = self.color(fg_index, self.theme.fg)
         bg = self.color(s.bg, None) if s.bg is not None else None
         if s.inverse:
-            fg, bg = (bg or self.theme["bg"]), fg
+            fg, bg = (bg or self.theme.bg), fg
         return fg, bg
 
     def text_class(self, s: Style, fg: str) -> str:
         key = (fg, s.bold, s.dim, s.italic, s.underline, s.strike)
-        if key == (self.theme["fg"], False, False, False, False, False):
+        if key == (self.theme.fg, False, False, False, False, False):
             return ""
         if key not in self.fg_classes:
             self.fg_classes[key] = f"f{len(self.fg_classes):x}"
@@ -141,15 +158,14 @@ class _StyleSheet:
         return "".join(rules)
 
 
-def _num(v: float) -> str:
-    return f"{v:.2f}".rstrip("0").rstrip(".")
+def _num(v: float, digits: int = 2) -> str:
+    return f"{v:.{digits}f}".rstrip("0").rstrip(".")
 
 
 def render(rec: Recording, opts: Options | None = None) -> tuple[str, Stats]:
     opts = opts or Options()
-    if opts.theme not in THEMES:
-        raise ValueError(f"unknown theme {opts.theme!r}; choose from {', '.join(THEMES)}")
-    theme = THEMES[opts.theme]
+    opts.validate()
+    theme = load_theme(opts.theme)
     sheet = _StyleSheet(theme)
 
     frames = build_frames(rec, opts)
@@ -160,16 +176,18 @@ def render(rec: Recording, opts: Options | None = None) -> tuple[str, Stats]:
     lh = opts.font_size * opts.line_height
     baseline = lh * 0.5 + opts.font_size * 0.36
 
-    rows = rec.rows
+    # The terminal can be resized during a recording: size for the largest.
+    cols = max(snap.cols for _, snap in frames)
+    rows = max(len(snap.rows) for _, snap in frames)
     if opts.trim:
         used = 0
         for _, snap in frames:
             for y, runs in enumerate(snap.rows):
-                if any(text.strip() or style.bg is not None or style.inverse for text, style in runs):
+                if any(text.strip() or not _invisible(" ", style) for text, style in runs):
                     used = max(used, y + 1)
             if snap.cursor_visible:
                 used = max(used, snap.cursor[0] + 1)
-        rows = max(1, min(rec.rows, used))
+        rows = max(1, min(rows, used))
 
     # ---- rows -> <defs>
     row_ids: dict = {}
@@ -214,8 +232,11 @@ def render(rec: Recording, opts: Options | None = None) -> tuple[str, Stats]:
                 if is_block:
                     parts.extend(draw_blocks(seg_col, seg, fg))
                     continue
-                shown = seg.rstrip()
-                if not shown.strip():
+                if style.hidden:
+                    continue
+                # Underline and strike-through show on spaces too.
+                shown = seg if style.underline or style.strike else seg.rstrip()
+                if not shown.strip() and not (style.underline or style.strike):
                     continue
                 cls = sheet.text_class(style, fg)
                 cls_attr = f' class="{cls}"' if cls else ""
@@ -273,7 +294,7 @@ def render(rec: Recording, opts: Options | None = None) -> tuple[str, Stats]:
     # ---- geometry
     pad = opts.padding
     bar = 30.0 if opts.window else 0.0
-    tw, th = rec.cols * cw, fh
+    tw, th = cols * cw, fh
     width, height = tw + 2 * pad, th + 2 * pad + bar
     title = opts.title if opts.title is not None else (rec.title or frames[-1][1].title)
 
@@ -290,17 +311,19 @@ def render(rec: Recording, opts: Options | None = None) -> tuple[str, Stats]:
         keys, prev = [], None
         for t, value in values:
             if value != prev:
-                keys.append(f"{_num(t / total * 100)}%{{transform:{value}}}")
+                keys.append(f"{_num(t / total * 100, pct_digits)}%{{transform:{value}}}")
                 prev = value
         return f"@keyframes {name}{{{''.join(keys)}}}"
 
     total = max(frames[-1][0] + opts.loop_delay, 0.1)
+    # Keyframe percentages need enough digits to tell adjacent frames apart.
+    pct_digits = 2 if total <= 30 else 3 if total <= 300 else 4
     animated = len({(i, c) for _, i, c in timeline}) > 1 and opts.at is None
     _, last_idx, last_cur = timeline[-1]
     css = [
         f"svg{{font-family:{FONT_STACK};font-size:{_num(opts.font_size)}px}}",
-        f"text{{fill:{theme['fg']};white-space:pre}}",
-        f".cur{{fill:{theme['cursor']};opacity:.75}}",
+        f"text{{fill:{theme.fg};white-space:pre}}",
+        f".cur{{fill:{theme.cursor};opacity:.75}}",
         sheet.css(),
         f".s{{transform:{strip_pos(last_idx)}}}.c{{transform:{cursor_pos(last_cur)}}}",
     ]
@@ -315,15 +338,15 @@ def render(rec: Recording, opts: Options | None = None) -> tuple[str, Stats]:
         css.append("@media (prefers-reduced-motion:reduce){.s,.c,.cur{animation:none}}")
 
     chrome = []
-    chrome.append(f'<rect width="{_num(width)}" height="{_num(height)}" rx="9" fill="{theme["bg"]}"/>')
+    chrome.append(f'<rect width="{_num(width)}" height="{_num(height)}" rx="9" fill="{theme.bg}"/>')
     if opts.window:
         chrome.append(f'<path d="M0 9a9 9 0 0 1 9-9h{_num(width - 18)}a9 9 0 0 1 9 9v{_num(bar - 9)}'
-                      f'h-{_num(width)}z" fill="{theme["chrome"]}"/>')
-        for i, color in enumerate(("#ff5f57", "#febc2e", "#28c840")):
+                      f'h-{_num(width)}z" fill="{theme.chrome}"/>')
+        for i, color in enumerate(theme.buttons):
             chrome.append(f'<circle cx="{_num(pad + 6 + i * 20)}" cy="{_num(bar / 2)}" r="6" fill="{color}"/>')
         if title:
             chrome.append(f'<text x="{_num(width / 2)}" y="{_num(bar / 2 + 4.5)}" text-anchor="middle" '
-                          f'style="font-size:12px;opacity:.65">{escape(title)}</text>')
+                          f'style="font-size:12px;fill:{theme.title};opacity:.65">{escape(title)}</text>')
 
     svg = (
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{_num(width)}" height="{_num(height)}" '
@@ -371,7 +394,8 @@ def _width(text: str) -> int:
 
 
 def _invisible(ch: str, style: Style) -> bool:
-    return ch == " " and style.bg is None and not style.inverse
+    """A cell that draws nothing: a space with no background or line through it."""
+    return ch == " " and style.bg is None and not (style.inverse or style.underline or style.strike)
 
 
 def _glyphs(runs: tuple) -> tuple:
